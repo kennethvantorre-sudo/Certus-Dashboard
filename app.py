@@ -67,9 +67,11 @@ def genereer_word_rapport(df):
 # ⚙️ 4. DE MOTOR: PDF & EXCEL ANALYSE
 def analyseer_bestanden(files, gekozen_project):
     treinen = {}
+    
+    # Eerst analyseren we alles en slaan we het tijdelijk op
     for file in files:
         try:
-            # --- BNX ANALYSE ---
+            # --- BNX ANALYSE (PDF) ---
             if file.name.lower().endswith('.pdf'):
                 reader = PyPDF2.PdfReader(file)
                 text = "".join([page.extract_text() for page in reader.pages])
@@ -77,26 +79,33 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    # OPLOSSING 1: Flexibele scanner voor nummers (vangt nu ook enters en spaties op)
-                    nummers = re.findall(r'(\d{5})\s*[\n\r]+\s*\d{2}/\d{2}/\d{2}', text)
-                    if not nummers: nummers = re.findall(r'(\d{5})\s+\d{2}/\d{2}/\d{2}', text)
-                    if not nummers: nummers = re.findall(r'^\s*(\d{5})\s*$', text, re.MULTILINE)
+                    # OPLOSSING: Zoek botweg naar 5 opeenvolgende cijfers in de buurt van een datum, of sowieso 5-cijferige getallen.
+                    nummers = re.findall(r'\b([1-9]\d{4})\b\s*[\n\r]*\s*\d{2}/\d{2}/\d{2,4}', text)
+                    if not nummers: nummers = re.findall(r'\b([1-9]\d{4})\b', text)
                     
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net).*?(\d+(?:,\d+)?)', text, re.IGNORECASE)
                     afstand = float(km_match.group(1).replace(',', '.')) if km_match else 16.064
                     
                     for t_nr in set(nummers):
                         is_rid = "Ja" if re.search(r'RID:\s*Oui\s*/\s*Ja', text, re.IGNORECASE) or "1202" in text or "1863" in text else "Nee"
-                        treinen[t_nr] = {
-                            "Datum": datum_str, "Project": gekozen_project, "Trein": t_nr, 
-                            "Type": "Losse Rit", 
-                            "Afstand (km)": afstand, "Gewicht (ton)": 0.0, "RID": is_rid, "UN": ""
-                        }
+                        
+                        # Update bestaande rit OF maak nieuwe aan
+                        if t_nr in treinen:
+                            treinen[t_nr]["Afstand (km)"] = afstand
+                            treinen[t_nr]["Datum"] = datum_str
+                            if is_rid == "Ja": treinen[t_nr]["RID"] = "Ja"
+                        else:
+                            treinen[t_nr] = {
+                                "Datum": datum_str, "Project": gekozen_project, "Trein": t_nr, 
+                                "Type": "Losse Rit", 
+                                "Afstand (km)": afstand, "Gewicht (ton)": 0.0, "RID": is_rid, "UN": ""
+                            }
 
             # --- EXCEL WAGONLIJST ANALYSE ---
             elif file.name.lower().endswith(('.xlsx', '.xls')):
                 xl = pd.read_excel(file)
                 
+                # Archief-check
                 if 'Trein' in xl.columns and 'Project' in xl.columns:
                     st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, xl]).drop_duplicates(subset=['Trein'], keep='last')
                     continue
@@ -105,12 +114,10 @@ def analyseer_bestanden(files, gekozen_project):
                 if t_nr_match:
                     t_nr = t_nr_match.group(1)
                     
-                    # OPLOSSING 2: Zoek blind in heel de Excel naar UN nummers (ongeacht de rij!)
                     excel_text = xl.to_string(index=False)
                     un_match = re.search(r'\b(1202|1863|1965|3257|1203|1170|3082)\b', excel_text)
                     un_code = un_match.group(1) if un_match else ""
 
-                    # OPLOSSING 3: Zorg dat hij Belgische komma's als decimalen snapt en naar getallen omzet
                     for col in xl.columns:
                         xl[col] = pd.to_numeric(xl[col].astype(str).str.replace(',', '.'), errors='coerce')
                     
@@ -120,12 +127,13 @@ def analyseer_bestanden(files, gekozen_project):
                     gewicht = realistische_waarden.max().max()
                     gewicht = float(gewicht) if pd.notnull(gewicht) else 0.0
                     
-                    # Als de trein eindigt op een 1 of 3 (of onder 500 ton), is het vaak een ledige wagonrit
                     is_ledig = t_nr.endswith('1') or t_nr.endswith('3') or gewicht < 450
                     type_rit = "Ledige Rit" if is_ledig else "Beladen Rit"
                     
+                    # Update bestaande rit (bijv. gemaakt door PDF) OF maak nieuwe aan
                     if t_nr in treinen: 
-                        treinen[t_nr].update({"Gewicht (ton)": gewicht, "Type": type_rit})
+                        treinen[t_nr]["Gewicht (ton)"] = gewicht
+                        treinen[t_nr]["Type"] = type_rit
                         if un_code: 
                             treinen[t_nr]["UN"] = un_code
                             treinen[t_nr]["RID"] = "Ja"
