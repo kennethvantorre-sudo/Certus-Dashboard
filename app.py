@@ -36,21 +36,15 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    st.caption("Certus Command Center v1.0")
+    st.caption("Certus Command Center v1.1")
 
 
 # 🎨 3. SCHERM 1: HOME (DASHBOARD)
 if keuze == "🏠 Home (Dashboard)":
-    
-    # Mooie header foto bovenaan
-    try:
-        st.image("loco.png", use_container_width=True)
-    except:
-        pass
         
     st.title("📊 Actueel Overzicht - 2026")
     
-    # KPI BLOKKEN
+    # KPI BLOKKEN (Nu staan deze direct bovenaan!)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Gereden Treinen", "114", "+12 deze week")
     col2.metric("Losse Ritten", "28", "-2 deze week")
@@ -76,6 +70,16 @@ if keuze == "🏠 Home (Dashboard)":
         fig_line = px.line(dummy_rid_tijdlijn, x='Datum', y=['Gewone Ritten', 'RID Ritten'],
                            color_discrete_map={'Gewone Ritten': '#3498db', 'RID Ritten': '#e74c3c'})
         st.plotly_chart(fig_line, use_container_width=True)
+
+    # --- FOTO ONDERAAN (Gecentreerd en kleiner) ---
+    st.markdown("---")
+    col_img_links, col_img_midden, col_img_rechts = st.columns([2, 3, 2])
+    
+    with col_img_midden:
+        try:
+            st.image("loco.png", caption="Certus Rail Solutions", use_container_width=True)
+        except:
+            pass
 
 
 # 🎨 4. SCHERM 2: INVOER RITTEN
