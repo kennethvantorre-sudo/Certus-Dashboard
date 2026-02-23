@@ -14,6 +14,59 @@ from streamlit_folium import st_folium
 # 🎨 1. PAGINA INSTELLINGEN
 st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout="wide")
 
+# --- ✨ MAGISCHE START ANIMATIE ✨ ---
+def speel_certus_animatie():
+    if 'animatie_gespeeld' not in st.session_state:
+        try:
+            with open("logo.png", "rb") as f:
+                data = f.read()
+                b64_logo = base64.b64encode(data).decode("utf-8")
+                
+            css_animatie = f"""
+            <style>
+            #splash-screen {{
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background-color: #0e1117;
+                z-index: 99999;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: fadeOut 1.5s forwards;
+                animation-delay: 2s;
+                pointer-events: none;
+            }}
+            #splash-logo {{
+                width: 350px;
+                animation: moveAndShrink 1.5s forwards;
+                animation-delay: 1.5s;
+            }}
+            
+            @keyframes fadeOut {{
+                0% {{ opacity: 1; }}
+                100% {{ opacity: 0; visibility: hidden; }}
+            }}
+            
+            @keyframes moveAndShrink {{
+                0% {{ transform: scale(1) translate(0, 0); opacity: 1; }}
+                100% {{ transform: scale(0.3) translate(-100vw, -100vh); opacity: 0; }}
+            }}
+            </style>
+            <div id="splash-screen">
+                <img id="splash-logo" src="data:image/png;base64,{b64_logo}">
+            </div>
+            """
+            st.markdown(css_animatie, unsafe_allow_html=True)
+            st.session_state.animatie_gespeeld = True
+        except Exception as e:
+            st.warning(f"⚠️ Animatie tip: Ik kan 'logo.png' niet vinden. Zorg dat het exact zo heet in GitHub.")
+
+speel_certus_animatie()
+# ------------------------------------
+
 # 🧠 2. GEHEUGEN & OPSCHONING
 if 'df_ritten' not in st.session_state:
     st.session_state.df_ritten = pd.DataFrame()
@@ -68,7 +121,6 @@ def genereer_word_rapport(df):
 def analyseer_bestanden(files, gekozen_project):
     treinen = {}
     
-    # Eerst analyseren we alles en slaan we het tijdelijk op
     for file in files:
         try:
             # --- BNX ANALYSE (PDF) ---
@@ -79,17 +131,17 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    # OPLOSSING: Zoek botweg naar 5 opeenvolgende cijfers in de buurt van een datum, of sowieso 5-cijferige getallen.
-                    nummers = re.findall(r'\b([1-9]\d{4})\b\s*[\n\r]*\s*\d{2}/\d{2}/\d{2,4}', text)
-                    if not nummers: nummers = re.findall(r'\b([1-9]\d{4})\b', text)
+                    # OPLOSSING: We filteren botweg alle 5-cijferige getallen, en negeren de UN codes.
+                    mogelijke_nummers = re.findall(r'\b[1-9]\d{4}\b', text)
+                    un_codes = {'1202', '1863', '1965', '3257', '1203', '1170', '3082'}
+                    nummers = list(set([n for n in mogelijke_nummers if n not in un_codes]))
                     
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net).*?(\d+(?:,\d+)?)', text, re.IGNORECASE)
                     afstand = float(km_match.group(1).replace(',', '.')) if km_match else 16.064
                     
-                    for t_nr in set(nummers):
+                    for t_nr in nummers:
                         is_rid = "Ja" if re.search(r'RID:\s*Oui\s*/\s*Ja', text, re.IGNORECASE) or "1202" in text or "1863" in text else "Nee"
                         
-                        # Update bestaande rit OF maak nieuwe aan
                         if t_nr in treinen:
                             treinen[t_nr]["Afstand (km)"] = afstand
                             treinen[t_nr]["Datum"] = datum_str
@@ -105,7 +157,6 @@ def analyseer_bestanden(files, gekozen_project):
             elif file.name.lower().endswith(('.xlsx', '.xls')):
                 xl = pd.read_excel(file)
                 
-                # Archief-check
                 if 'Trein' in xl.columns and 'Project' in xl.columns:
                     st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, xl]).drop_duplicates(subset=['Trein'], keep='last')
                     continue
@@ -130,7 +181,6 @@ def analyseer_bestanden(files, gekozen_project):
                     is_ledig = t_nr.endswith('1') or t_nr.endswith('3') or gewicht < 450
                     type_rit = "Ledige Rit" if is_ledig else "Beladen Rit"
                     
-                    # Update bestaande rit (bijv. gemaakt door PDF) OF maak nieuwe aan
                     if t_nr in treinen: 
                         treinen[t_nr]["Gewicht (ton)"] = gewicht
                         treinen[t_nr]["Type"] = type_rit
@@ -146,6 +196,7 @@ def analyseer_bestanden(files, gekozen_project):
 
 # --- DASHBOARD LAYOUT ---
 with st.sidebar:
+    st.image("logo.png", width=180)
     st.write("🚂 **Certus Rail Solutions**")
     keuze = st.radio("Menu:", ("🏠 Home (Dashboard)", "📄 Invoer Ritten", "🖨️ Rapportage"))
 
@@ -157,7 +208,7 @@ if keuze == "🏠 Home (Dashboard)":
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Treinen Totaal", len(df))
         c2.metric("Km Met Last", f"{df[df['Type'] == 'Beladen Rit']['Afstand (km)'].sum():,.1f} km")
-        c3.metric("Km Losse Ritten", f"{df[df['Type'] == 'Losse Rit']['Afstand (km)'].sum():,.1f} km")
+        c3.metric("Km Losse/Ledig", f"{df[df['Type'].isin(['Losse Rit', 'Ledige Rit'])]['Afstand (km)'].sum():,.1f} km")
         c4.metric("Totaal Tonnage", f"{df['Gewicht (ton)'].sum():,.1f} t")
         
         st.markdown("---")
@@ -176,7 +227,7 @@ if keuze == "🏠 Home (Dashboard)":
             folium.Marker([51.32, 3.20], popup="Zeebrugge", icon=folium.Icon(color='red', icon='train', prefix='fa')).add_to(m)
             st_folium(m, height=400, use_container_width=True)
     else: 
-        st.info("Geen data beschikbaar. Upload je bestanden of herstel je archief bij 'Invoer Ritten'.")
+        st.info("Geen data beschikbaar. Ga in het menu links naar 'Invoer Ritten' om bestanden te uploaden.")
 
 elif keuze == "📄 Invoer Ritten":
     st.title("📄 Data Invoeren")
