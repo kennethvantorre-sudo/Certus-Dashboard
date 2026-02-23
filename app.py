@@ -77,8 +77,9 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    # OPLOSSING: We vangen nu ook onzichtbare enters op tussen het nummer en de datum!
-                    nummers = re.findall(r'(\d{5})[\s\n]+\d{2}/\d{2}/\d{2}', text)
+                    # OPLOSSING 1: Flexibele scanner voor nummers (vangt nu ook enters en spaties op)
+                    nummers = re.findall(r'(\d{5})\s*[\n\r]+\s*\d{2}/\d{2}/\d{2}', text)
+                    if not nummers: nummers = re.findall(r'(\d{5})\s+\d{2}/\d{2}/\d{2}', text)
                     if not nummers: nummers = re.findall(r'^\s*(\d{5})\s*$', text, re.MULTILINE)
                     
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net).*?(\d+(?:,\d+)?)', text, re.IGNORECASE)
@@ -94,7 +95,6 @@ def analyseer_bestanden(files, gekozen_project):
 
             # --- EXCEL WAGONLIJST ANALYSE ---
             elif file.name.lower().endswith(('.xlsx', '.xls')):
-                # OPLOSSING: We forceren openpyxl niet meer, waardoor hij nu de oude .xls bestanden kan lezen.
                 xl = pd.read_excel(file)
                 
                 if 'Trein' in xl.columns and 'Project' in xl.columns:
@@ -105,23 +105,24 @@ def analyseer_bestanden(files, gekozen_project):
                 if t_nr_match:
                     t_nr = t_nr_match.group(1)
                     
-                    # Nieuw: We trekken het UN nummer direct uit jouw Wagonlijst!
-                    un_code = ""
-                    un_cols = [c for c in xl.columns if 'UN' in str(c).upper()]
-                    if un_cols:
-                        un_vals = xl[un_cols[0]].dropna().astype(str).str.replace(r'\.0$', '', regex=True).unique()
-                        un_vals = [v for v in un_vals if v.strip() and v != 'nan']
-                        if un_vals:
-                            un_code = un_vals[0]
+                    # OPLOSSING 2: Zoek blind in heel de Excel naar UN nummers (ongeacht de rij!)
+                    excel_text = xl.to_string(index=False)
+                    un_match = re.search(r'\b(1202|1863|1965|3257|1203|1170|3082)\b', excel_text)
+                    un_code = un_match.group(1) if un_match else ""
 
+                    # OPLOSSING 3: Zorg dat hij Belgische komma's als decimalen snapt en naar getallen omzet
+                    for col in xl.columns:
+                        xl[col] = pd.to_numeric(xl[col].astype(str).str.replace(',', '.'), errors='coerce')
+                    
                     num_data = xl.select_dtypes(include=['number'])
-                    # OPLOSSING 2: Filter meer bekende UN-codes (zoals 1863) eruit zodat ze niet als gewicht tellen
-                    zuivere_data = num_data[~num_data.isin([1202, 1863, 1965, 3257])]
-                    realistische_waarden = zuivere_data[zuivere_data < 5000]
+                    zuivere_data = num_data[~num_data.isin([1202, 1863, 1965, 3257, 1203, 1170, 3082])]
+                    realistische_waarden = zuivere_data[zuivere_data < 4000]
                     gewicht = realistische_waarden.max().max()
                     gewicht = float(gewicht) if pd.notnull(gewicht) else 0.0
                     
-                    type_rit = "Ledige Rit" if t_nr.endswith('1') or gewicht < 400 else "Beladen Rit"
+                    # Als de trein eindigt op een 1 of 3 (of onder 500 ton), is het vaak een ledige wagonrit
+                    is_ledig = t_nr.endswith('1') or t_nr.endswith('3') or gewicht < 450
+                    type_rit = "Ledige Rit" if is_ledig else "Beladen Rit"
                     
                     if t_nr in treinen: 
                         treinen[t_nr].update({"Gewicht (ton)": gewicht, "Type": type_rit})
@@ -131,7 +132,6 @@ def analyseer_bestanden(files, gekozen_project):
                     else: 
                         treinen[t_nr] = {"Datum": datetime.today().strftime('%Y-%m-%d'), "Project": gekozen_project, "Trein": t_nr, "Type": type_rit, "Afstand (km)": 0.0, "Gewicht (ton)": gewicht, "RID": "Ja" if un_code else "Nee", "UN": un_code}
         except Exception as e: 
-            # DIT IS EEN REDDER IN NOOD: Als een bestand crasht, zie je direct bovenaan de site in het rood WAAROM.
             st.error(f"Fout bij het lezen van bestand {file.name}: {e}")
             
     return pd.DataFrame(list(treinen.values()))
@@ -185,7 +185,6 @@ elif keuze == "📄 Invoer Ritten":
     if not st.session_state.df_ritten.empty:
         st.write("### 🗄️ Database")
         st.dataframe(st.session_state.df_ritten, use_container_width=True)
-        # Altijd de download knop aanbieden voor de veiligheid!
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             st.session_state.df_ritten.to_excel(writer, index=False)
@@ -193,7 +192,7 @@ elif keuze == "📄 Invoer Ritten":
 
 elif keuze == "🖨️ Rapportage":
     st.title("🖨️ Rapportage Generator")
-    st.write("Genereer hier het formele Certus projectrapport (zoals de RID-rapportage).")
+    st.write("Genereer hier het formele Certus projectrapport.")
     
     if not st.session_state.df_ritten.empty:
         st.dataframe(st.session_state.df_ritten.head(3), use_container_width=True)
