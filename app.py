@@ -12,55 +12,56 @@ st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout=
 
 # --- ✨ MAGISCHE START ANIMATIE ✨ ---
 def speel_certus_animatie():
-    try:
-        # We laden het logo in als een ruwe code zodat we het kunnen animeren
-        with open("logo.png", "rb") as f:
-            data = f.read()
-            b64_logo = base64.b64encode(data).decode("utf-8")
+    # We zorgen dat de animatie alleen de allereerste keer afspeelt
+    if 'animatie_gespeeld' not in st.session_state:
+        try:
+            with open("logo.png", "rb") as f:
+                data = f.read()
+                b64_logo = base64.b64encode(data).decode("utf-8")
+                
+            css_animatie = f"""
+            <style>
+            #splash-screen {{
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background-color: #0e1117;
+                z-index: 99999;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: fadeOut 1.5s forwards;
+                animation-delay: 2s;
+                pointer-events: none;
+            }}
+            #splash-logo {{
+                width: 350px;
+                animation: moveAndShrink 1.5s forwards;
+                animation-delay: 1.5s;
+            }}
             
-        # Hier is de verborgen CSS code die de animatie aanstuurt
-        css_animatie = f"""
-        <style>
-        #splash-screen {{
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background-color: #0e1117; /* Streamlit donkere achtergrond */
-            z-index: 99999;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            animation: fadeOut 1.5s forwards;
-            animation-delay: 2s; /* Blijft eerst 2 seconden mooi in het midden staan */
-            pointer-events: none;
-        }}
-        #splash-logo {{
-            width: 350px; /* Lekker groot in het midden */
-            animation: moveAndShrink 1.5s forwards;
-            animation-delay: 1.5s; /* Begint te krimpen na 1.5s */
-        }}
-        
-        /* Het scherm verdwijnt */
-        @keyframes fadeOut {{
-            0% {{ opacity: 1; }}
-            100% {{ opacity: 0; visibility: hidden; }}
-        }}
-        
-        /* Het logo krimpt en vliegt naar linksboven (de zijbalk) */
-        @keyframes moveAndShrink {{
-            0% {{ transform: scale(1) translate(0, 0); opacity: 1; }}
-            100% {{ transform: scale(0.3) translate(-100vw, -100vh); opacity: 0; }}
-        }}
-        </style>
-        <div id="splash-screen">
-            <img id="splash-logo" src="data:image/png;base64,{b64_logo}">
-        </div>
-        """
-        st.markdown(css_animatie, unsafe_allow_html=True)
-    except Exception as e:
-        pass # Als het logo even niet gevonden wordt, crasht de app niet
+            @keyframes fadeOut {{
+                0% {{ opacity: 1; }}
+                100% {{ opacity: 0; visibility: hidden; }}
+            }}
+            
+            @keyframes moveAndShrink {{
+                0% {{ transform: scale(1) translate(0, 0); opacity: 1; }}
+                100% {{ transform: scale(0.3) translate(-100vw, -100vh); opacity: 0; }}
+            }}
+            </style>
+            <div id="splash-screen">
+                <img id="splash-logo" src="data:image/png;base64,{b64_logo}">
+            </div>
+            """
+            st.markdown(css_animatie, unsafe_allow_html=True)
+            st.session_state.animatie_gespeeld = True 
+            
+        except Exception as e:
+            # Als hij hem niet vindt, geeft hij een melding bovenaan
+            st.error(f"⚠️ Animatie tip: Ik kan het bestand 'logo.png' niet vinden in GitHub. Zorg dat het plaatje exact 'logo.png' heet (zonder hoofdletters). Foutmelding: {e}")
 
 # Roep de animatie aan!
 speel_certus_animatie()
@@ -84,6 +85,7 @@ def analyseer_bestanden(files, gekozen_project):
                     
                     # Nummers vissen
                     nummers = re.findall(r'(\d{5})\s+\d{2}/\d{2}/\d{2}', text)
+                    if not nummers: nummers = re.findall(r'^\s*(\d{5})\s*$', text, re.MULTILINE)
                     
                     # KM scanner
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net).*?(\d+(?:,\d+)?)', text, re.IGNORECASE)
@@ -99,6 +101,12 @@ def analyseer_bestanden(files, gekozen_project):
 
             elif file.name.lower().endswith(('.xlsx', '.xls')):
                 xl = pd.read_excel(file, engine='openpyxl')
+                
+                # Check of dit een oud Certus Archief is (om data te herstellen)
+                if 'Trein' in xl.columns and 'Project' in xl.columns:
+                    st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, xl]).drop_duplicates(subset=['Trein'], keep='last')
+                    continue
+
                 t_nr_match = re.search(r'(\d{5})', file.name)
                 if t_nr_match:
                     t_nr = t_nr_match.group(1)
@@ -109,13 +117,14 @@ def analyseer_bestanden(files, gekozen_project):
                     
                     gewicht = float(gewicht) if pd.notnull(gewicht) else 0.0
                     if t_nr in treinen: treinen[t_nr].update({"Gewicht (ton)": gewicht})
+                    else: treinen[t_nr] = {"Datum": datetime.today().strftime('%Y-%m-%d'), "Project": gekozen_project, "Trein": t_nr, "Type": "Beladen Rit", "Afstand (km)": 0.0, "Gewicht (ton)": gewicht, "RID": "Nee", "UN": ""}
         except: pass
     return pd.DataFrame(list(treinen.values()))
 
 # --- DASHBOARD LAYOUT ---
 with st.sidebar:
     st.write("🚂 **Certus Rail Solutions**")
-    keuze = st.radio("Menu:", ("🏠 Home (Dashboard)", "📄 Invoer Ritten", "⛽ Invoer Brandstof"))
+    keuze = st.radio("Menu:", ("🏠 Home (Dashboard)", "📄 Invoer Ritten"))
 
 if keuze == "🏠 Home (Dashboard)":
     st.title("📊 Actueel Overzicht - 2026")
@@ -127,7 +136,14 @@ if keuze == "🏠 Home (Dashboard)":
         c3.metric("Km Infrabel", f"{df['Afstand (km)'].sum():,.2f}")
         c4.metric("RID Ritten", len(df[df['RID'] == 'Ja']))
         st.plotly_chart(px.bar(df, x='Trein', y='Gewicht (ton)', color='Type', barmode='group', template="plotly_dark"), use_container_width=True)
-    else: st.info("Geen data. Upload bestanden bij 'Invoer Ritten'.")
+    else: st.info("Geen data. Upload bestanden of herstel je archief bij 'Invoer Ritten'.")
+    
+    # Extra logo op de homepagina voor de afwerking
+    try:
+        col_l, col_m, col_r = st.columns([2, 3, 2])
+        with col_m:
+            st.image("logo.png", use_container_width=True)
+    except: pass
 
 elif keuze == "📄 Invoer Ritten":
     st.title("📄 Data Invoeren")
@@ -135,9 +151,14 @@ elif keuze == "📄 Invoer Ritten":
     uploaded_files = st.file_uploader("Upload PDF's & Excel", type=["pdf", "xlsx", "xls"], accept_multiple_files=True)
     if uploaded_files and st.button("🚀 Verwerk bestanden"):
         nieuw_df = analyseer_bestanden(uploaded_files, gekozen_project)
-        st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, nieuw_df]).drop_duplicates(subset=['Trein'], keep='last')
-        st.success("Data bijgewerkt met RID-check!")
+        if not nieuw_df.empty:
+            st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, nieuw_df]).drop_duplicates(subset=['Trein'], keep='last')
+        st.success("Data succesvol verwerkt!")
         st.rerun()
     if not st.session_state.df_ritten.empty:
         st.write("### 🗄️ Database")
         st.dataframe(st.session_state.df_ritten, use_container_width=True)
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            st.session_state.df_ritten.to_excel(writer, index=False)
+        st.download_button("📥 Download Excel Archief", data=output.getvalue(), file_name=f"Certus_Master_Data.xlsx")
