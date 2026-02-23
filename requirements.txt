@@ -7,3 +7,4 @@ openpyxl
 python-docx
 folium
 streamlit-folium
+xlrd
