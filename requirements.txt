@@ -4,3 +4,6 @@ PyPDF2
 plotly
 xlsxwriter
 openpyxl
+python-docx
+folium
+streamlit-folium
