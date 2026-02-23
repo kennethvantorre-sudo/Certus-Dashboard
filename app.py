@@ -5,9 +5,66 @@ import re
 from io import BytesIO
 import plotly.express as px
 from datetime import datetime
+import base64
 
 # 🎨 1. PAGINA INSTELLINGEN
 st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout="wide")
+
+# --- ✨ MAGISCHE START ANIMATIE ✨ ---
+def speel_certus_animatie():
+    try:
+        # We laden het logo in als een ruwe code zodat we het kunnen animeren
+        with open("logo.png", "rb") as f:
+            data = f.read()
+            b64_logo = base64.b64encode(data).decode("utf-8")
+            
+        # Hier is de verborgen CSS code die de animatie aanstuurt
+        css_animatie = f"""
+        <style>
+        #splash-screen {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: #0e1117; /* Streamlit donkere achtergrond */
+            z-index: 99999;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            animation: fadeOut 1.5s forwards;
+            animation-delay: 2s; /* Blijft eerst 2 seconden mooi in het midden staan */
+            pointer-events: none;
+        }}
+        #splash-logo {{
+            width: 350px; /* Lekker groot in het midden */
+            animation: moveAndShrink 1.5s forwards;
+            animation-delay: 1.5s; /* Begint te krimpen na 1.5s */
+        }}
+        
+        /* Het scherm verdwijnt */
+        @keyframes fadeOut {{
+            0% {{ opacity: 1; }}
+            100% {{ opacity: 0; visibility: hidden; }}
+        }}
+        
+        /* Het logo krimpt en vliegt naar linksboven (de zijbalk) */
+        @keyframes moveAndShrink {{
+            0% {{ transform: scale(1) translate(0, 0); opacity: 1; }}
+            100% {{ transform: scale(0.3) translate(-100vw, -100vh); opacity: 0; }}
+        }}
+        </style>
+        <div id="splash-screen">
+            <img id="splash-logo" src="data:image/png;base64,{b64_logo}">
+        </div>
+        """
+        st.markdown(css_animatie, unsafe_allow_html=True)
+    except Exception as e:
+        pass # Als het logo even niet gevonden wordt, crasht de app niet
+
+# Roep de animatie aan!
+speel_certus_animatie()
+# ------------------------------------
 
 # 🧠 2. GEHEUGEN & OPSCHONING
 if 'df_ritten' not in st.session_state:
@@ -33,8 +90,6 @@ def analyseer_bestanden(files, gekozen_project):
                     afstand = float(km_match.group(1).replace(',', '.')) if km_match else 16.064
                     
                     for t_nr in set(nummers):
-                        # Bepaal Type op basis van nummer (vaak is 01 ledig en 02 beladen in pendels)
-                        # Of we checken op keywords in de tekst nabij het nummer
                         is_rid = "Ja" if "RID: Oui / Ja" in text or "1202" in text else "Nee"
                         treinen[t_nr] = {
                             "Datum": datum_str, "Project": gekozen_project, "Trein": t_nr, 
