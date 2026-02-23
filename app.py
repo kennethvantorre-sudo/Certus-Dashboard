@@ -21,10 +21,8 @@ if 'df_ritten' not in st.session_state:
 # 📝 3. WORD RAPPORTAGE GENERATOR
 def genereer_word_rapport(df):
     doc = docx.Document()
-    
-    # Titel en subtitel
     titel = doc.add_heading('Certus Rail Solutions - Operationeel Rapport', 0)
-    titel.alignment = 1 # Center
+    titel.alignment = 1 
     doc.add_paragraph(f"Gegenereerd op: {datetime.now().strftime('%d-%m-%Y %H:%M')}")
     
     doc.add_heading('1. Samenvatting van de Prestaties', level=1)
@@ -41,8 +39,6 @@ def genereer_word_rapport(df):
     p.add_run(f"{tot_ton:,.1f} ton.").bold = True
     
     doc.add_heading('2. Rittenspecificatie per Project', level=1)
-    
-    # Tabel toevoegen
     tabel = doc.add_table(rows=1, cols=6)
     tabel.style = 'Table Grid'
     hdr_cells = tabel.rows[0].cells
@@ -63,8 +59,6 @@ def genereer_word_rapport(df):
         row_cells[5].text = f"{row['Gewicht (ton)']:.1f}"
 
     doc.add_paragraph("\nCertus Rail Solutions - Vertrouwelijk")
-    
-    # Sla op in een virtueel bestand
     f = BytesIO()
     doc.save(f)
     f.seek(0)
@@ -83,26 +77,26 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    nummers = re.findall(r'(\d{5})\s+\d{2}/\d{2}/\d{2}', text)
+                    # OPLOSSING: We vangen nu ook onzichtbare enters op tussen het nummer en de datum!
+                    nummers = re.findall(r'(\d{5})[\s\n]+\d{2}/\d{2}/\d{2}', text)
                     if not nummers: nummers = re.findall(r'^\s*(\d{5})\s*$', text, re.MULTILINE)
                     
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net).*?(\d+(?:,\d+)?)', text, re.IGNORECASE)
                     afstand = float(km_match.group(1).replace(',', '.')) if km_match else 16.064
                     
                     for t_nr in set(nummers):
-                        is_rid = "Ja" if "RID: Oui / Ja" in text or "1202" in text else "Nee"
-                        # Standaard is het een losse rit. Dit verandert als er een Excel wordt geüpload.
+                        is_rid = "Ja" if re.search(r'RID:\s*Oui\s*/\s*Ja', text, re.IGNORECASE) or "1202" in text or "1863" in text else "Nee"
                         treinen[t_nr] = {
                             "Datum": datum_str, "Project": gekozen_project, "Trein": t_nr, 
                             "Type": "Losse Rit", 
-                            "Afstand (km)": afstand, "Gewicht (ton)": 0.0, "RID": is_rid, "UN": "1202" if is_rid == "Ja" else ""
+                            "Afstand (km)": afstand, "Gewicht (ton)": 0.0, "RID": is_rid, "UN": ""
                         }
 
             # --- EXCEL WAGONLIJST ANALYSE ---
             elif file.name.lower().endswith(('.xlsx', '.xls')):
-                xl = pd.read_excel(file, engine='openpyxl')
+                # OPLOSSING: We forceren openpyxl niet meer, waardoor hij nu de oude .xls bestanden kan lezen.
+                xl = pd.read_excel(file)
                 
-                # Archief herstel check
                 if 'Trein' in xl.columns and 'Project' in xl.columns:
                     st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, xl]).drop_duplicates(subset=['Trein'], keep='last')
                     continue
@@ -110,22 +104,36 @@ def analyseer_bestanden(files, gekozen_project):
                 t_nr_match = re.search(r'(\d{5})', file.name)
                 if t_nr_match:
                     t_nr = t_nr_match.group(1)
-                    num_data = xl.select_dtypes(include=['number'])
-                    zuivere_data = num_data[num_data != 1202]
                     
-                    # Filter belachelijk hoge getallen (zoals wagennummers) eruit
+                    # Nieuw: We trekken het UN nummer direct uit jouw Wagonlijst!
+                    un_code = ""
+                    un_cols = [c for c in xl.columns if 'UN' in str(c).upper()]
+                    if un_cols:
+                        un_vals = xl[un_cols[0]].dropna().astype(str).str.replace(r'\.0$', '', regex=True).unique()
+                        un_vals = [v for v in un_vals if v.strip() and v != 'nan']
+                        if un_vals:
+                            un_code = un_vals[0]
+
+                    num_data = xl.select_dtypes(include=['number'])
+                    # OPLOSSING 2: Filter meer bekende UN-codes (zoals 1863) eruit zodat ze niet als gewicht tellen
+                    zuivere_data = num_data[~num_data.isin([1202, 1863, 1965, 3257])]
                     realistische_waarden = zuivere_data[zuivere_data < 5000]
                     gewicht = realistische_waarden.max().max()
                     gewicht = float(gewicht) if pd.notnull(gewicht) else 0.0
                     
-                    # Bepaal Ledig of Beladen o.b.v. wagonlijst (Bijv. onder de 500 ton = vaak ledig of nummer eindigt op 1)
                     type_rit = "Ledige Rit" if t_nr.endswith('1') or gewicht < 400 else "Beladen Rit"
                     
                     if t_nr in treinen: 
                         treinen[t_nr].update({"Gewicht (ton)": gewicht, "Type": type_rit})
+                        if un_code: 
+                            treinen[t_nr]["UN"] = un_code
+                            treinen[t_nr]["RID"] = "Ja"
                     else: 
-                        treinen[t_nr] = {"Datum": datetime.today().strftime('%Y-%m-%d'), "Project": gekozen_project, "Trein": t_nr, "Type": type_rit, "Afstand (km)": 0.0, "Gewicht (ton)": gewicht, "RID": "Nee", "UN": ""}
-        except: pass
+                        treinen[t_nr] = {"Datum": datetime.today().strftime('%Y-%m-%d'), "Project": gekozen_project, "Trein": t_nr, "Type": type_rit, "Afstand (km)": 0.0, "Gewicht (ton)": gewicht, "RID": "Ja" if un_code else "Nee", "UN": un_code}
+        except Exception as e: 
+            # DIT IS EEN REDDER IN NOOD: Als een bestand crasht, zie je direct bovenaan de site in het rood WAAROM.
+            st.error(f"Fout bij het lezen van bestand {file.name}: {e}")
+            
     return pd.DataFrame(list(treinen.values()))
 
 # --- DASHBOARD LAYOUT ---
@@ -138,7 +146,6 @@ if keuze == "🏠 Home (Dashboard)":
     df = st.session_state.df_ritten
     
     if not df.empty:
-        # Tellers
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Treinen Totaal", len(df))
         c2.metric("Km Met Last", f"{df[df['Type'] == 'Beladen Rit']['Afstand (km)'].sum():,.1f} km")
@@ -147,7 +154,6 @@ if keuze == "🏠 Home (Dashboard)":
         
         st.markdown("---")
         
-        # Grafieken
         col_grafiek, col_kaart = st.columns([1.5, 1])
         with col_grafiek:
             st.write("### 🏆 Prestaties per Project")
@@ -156,14 +162,11 @@ if keuze == "🏠 Home (Dashboard)":
             
         with col_kaart:
             st.write("### 🗺️ Sporenkaart")
-            # We maken een interactieve kaart gecentreerd op België
             m = folium.Map(location=[51.05, 3.71], zoom_start=8, tiles="CartoDB dark_matter")
-            # Voorbeeld locaties (dit kunnen we later exact koppelen aan de BNX stations)
             folium.Marker([51.13, 3.82], popup="Gent-Zeehaven", icon=folium.Icon(color='red', icon='train', prefix='fa')).add_to(m)
             folium.Marker([51.27, 4.38], popup="Antwerpen-Noord", icon=folium.Icon(color='red', icon='train', prefix='fa')).add_to(m)
             folium.Marker([51.32, 3.20], popup="Zeebrugge", icon=folium.Icon(color='red', icon='train', prefix='fa')).add_to(m)
             st_folium(m, height=400, use_container_width=True)
-            
     else: 
         st.info("Geen data beschikbaar. Upload je bestanden of herstel je archief bij 'Invoer Ritten'.")
 
@@ -182,6 +185,11 @@ elif keuze == "📄 Invoer Ritten":
     if not st.session_state.df_ritten.empty:
         st.write("### 🗄️ Database")
         st.dataframe(st.session_state.df_ritten, use_container_width=True)
+        # Altijd de download knop aanbieden voor de veiligheid!
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            st.session_state.df_ritten.to_excel(writer, index=False)
+        st.download_button("📥 Download Excel Archief", data=output.getvalue(), file_name=f"Certus_Master_Data.xlsx")
 
 elif keuze == "🖨️ Rapportage":
     st.title("🖨️ Rapportage Generator")
