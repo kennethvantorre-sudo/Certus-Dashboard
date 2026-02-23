@@ -3,5 +3,4 @@ pandas
 PyPDF2
 plotly
 xlsxwriter
-Plaintext
 openpyxl
