@@ -131,8 +131,13 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    # OPLOSSING: We filteren botweg alle 5-cijferige getallen, en negeren de UN codes.
-                    mogelijke_nummers = re.findall(r'\b[1-9]\d{4}\b', text)
+                    # OPLOSSING: We forceren een scheiding (spaties) tussen datums en de rest van de tekst.
+                    text_clean = re.sub(r'([0-3]\d/[0-1]\d/\d{2,4})', r' \1 ', text)
+                    
+                    # We pakken elk 5-cijferig getal dat NIET is omringd door andere cijfers (zoals 10-cijferige dossiernummers)
+                    mogelijke_nummers = re.findall(r'(?<!\d)([1-9]\d{4})(?!\d)', text_clean)
+                    
+                    # Filter UN codes eruit zodat die niet als treinnummer worden gezien
                     un_codes = {'1202', '1863', '1965', '3257', '1203', '1170', '3082'}
                     nummers = list(set([n for n in mogelijke_nummers if n not in un_codes]))
                     
