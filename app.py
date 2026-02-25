@@ -11,7 +11,7 @@ st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout=
 # --- AI CONFIGURATIE ---
 API_KEY = "AIzaSyDGvPTbF1_s_PmUMqOhBr2BjVYVk6aS1Zg"
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-pro')
 
 # --- DATABASE LOCATIES ---
 LOCATIES_DB = {
