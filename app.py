@@ -21,7 +21,8 @@ LOCATIES_DB = {
     "ROOSENDAAL": [51.540, 4.458],
     "ZEEBRUGGE": [51.328, 3.197],
     "KALLO": [51.254, 4.275],
-    "BRUSSEL-ZUID": [50.836, 4.335]
+    "BRUSSEL-ZUID": [50.836, 4.335],
+    "EVERGEM-BUNDEL ZANDEKEN": [51.121, 3.738]
 }
 
 def speel_certus_animatie():
@@ -84,8 +85,11 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    # --- TERUG NAAR JOUW SUCCESVOLLE V3.7 REGEX ---
-                    ruwe_nummers = re.findall(r'(?<!\d)([1-9]\d{4})(?!\d)', text) + re.findall(r'([1-9]\d{4})(?=\s*\d{2}/\d{2})', text)
+                    # --- DE DEFINITIEVE TREINNUMMER SCANNER ---
+                    # Dit zoekt uitsluitend naar 5 cijfers die direct gevolgd worden door een datum (bijv. 23/02)
+                    # Hierdoor pakt hij 65903 en 87902 perfect, en negeert hij jaartallen en dossiernummers.
+                    ruwe_nummers_met_spaties = re.findall(r'(?<!\d)([1-9](?:[\s]*\d){4})\s*(?=\d{2}/\d{2})', text)
+                    ruwe_nummers = [n.replace(' ', '').replace('\n', '') for n in ruwe_nummers_met_spaties]
                     
                     un_codes = {'1202', '1863', '1965', '3257', '1203', '1170', '3082'}
                     nummers = list(set([n for n in ruwe_nummers if n not in un_codes]))
@@ -93,7 +97,7 @@ def analyseer_bestanden(files, gekozen_project):
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net)[^\d]*(\d+(?:[.,]\d+)?)', text, re.IGNORECASE)
                     afstand = float(km_match.group(1).replace(',', '.')) if km_match else 0.0
                     
-                    # --- NIEUW: LOCATIE SCANNER (Van -> Naar) ---
+                    # --- DE DEFINITIEVE LOCATIE SCANNER ---
                     text_upper = text.upper()
                     route_match = re.search(r'([A-Z0-9.-]+)\s*->\s*([A-Z0-9.-]+)', text_upper)
                     
@@ -139,7 +143,10 @@ def analyseer_bestanden(files, gekozen_project):
                     zuivere_data = num_data[~num_data.isin([1202, 1863, 1965, 3257, 1203, 1170, 3082])]
                     gewicht = zuivere_data[zuivere_data < 4000].max().max()
                     gewicht = float(gewicht) if pd.notnull(gewicht) else 0.0
+                    
+                    # Excel Logica: Bepaalt feilloos het type rit (beladen/ledig)
                     type_rit = "Ledige Rit" if t_nr.endswith('1') or t_nr.endswith('3') or gewicht < 450 else "Beladen Rit"
+                    
                     if t_nr in treinen: 
                         treinen[t_nr].update({"Gewicht (ton)": gewicht, "Type": type_rit})
                         if un_code: treinen[t_nr].update({"UN": un_code, "RID": "Ja"})
