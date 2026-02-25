@@ -16,7 +16,8 @@ st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout=
 # --- AI CONFIGURATIE VOOR DE CHATBOT ---
 API_KEY = "AIzaSyCiz1mWb378emBqRE3Tq3rLIIyFtm1fajI"
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash') 
+# We gebruiken gemini-pro, dit is het meest stabiele model voor de chat
+model = genai.GenerativeModel('gemini-pro') 
 
 # --- DATABASE LOCATIES ---
 LOCATIES_DB = {
@@ -87,6 +88,16 @@ def genereer_word_rapport(df):
 
 def analyseer_bestanden(files, gekozen_project):
     treinen = {}
+    
+    # VANGNET 1: Lees eerst de Excel bestandsnamen uit om bekende treinen te forceren
+    bekende_treinen = set()
+    for file in files:
+        if file.name.lower().endswith(('.xlsx', '.xls')):
+            t_nr_match = re.search(r'(\d{5})', file.name)
+            if t_nr_match:
+                bekende_treinen.add(t_nr_match.group(1))
+
+    # PDF VERWERKING
     for file in files:
         try:
             if file.name.lower().endswith('.pdf'):
@@ -96,8 +107,20 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    # Stabiele Regex voor treinnummers (v3.11)
-                    ruwe_nummers = re.findall(r'(?<!\d)([1-9]\d{4})(?!\d)', text) + re.findall(r'([1-9]\d{4})(?=\s*\d{2}/\d{2})', text)
+                    # Zuig alle spaties en enters uit de tekst voor de moeilijke Infrabel formaten
+                    clean_text = text.replace(' ', '').replace('\n', '')
+                    ruwe_nummers = re.findall(r'([1-9]\d{4})(?=\d{2}/\d{2}/\d{2,4})', clean_text)
+                    
+                    # Oude regex als backup voor makkelijke formaten
+                    oude_nummers = re.findall(r'(?<!\d)([1-9]\d{4})(?!\d)', text) + re.findall(r'([1-9]\d{4})(?=\s*\d{2}/\d{2})', text)
+                    for n in oude_nummers:
+                        if n not in ruwe_nummers:
+                            ruwe_nummers.append(n)
+
+                    # FORCEER DE BEKENDE TREINEN UIT DE EXCEL
+                    for bt in bekende_treinen:
+                        if bt in clean_text and bt not in ruwe_nummers:
+                            ruwe_nummers.append(bt)
                     
                     un_codes = {'1202', '1863', '1965', '3257', '1203', '1170', '3082'}
                     nummers = list(set([n for n in ruwe_nummers if n not in un_codes]))
@@ -133,6 +156,7 @@ def analyseer_bestanden(files, gekozen_project):
                                 "Vertrek": vertrek_loc, "Aankomst": aankomst_loc
                             }
 
+            # EXCEL VERWERKING
             elif file.name.lower().endswith(('.xlsx', '.xls')):
                 xl = pd.read_excel(file)
                 if 'Trein' in xl.columns and 'Project' in xl.columns:
@@ -153,7 +177,7 @@ def analyseer_bestanden(files, gekozen_project):
                     
                     type_rit = "Ledige Rit" if t_nr.endswith('1') or t_nr.endswith('3') or gewicht < 450 else "Beladen Rit"
                     
-                    # Backup locaties uit Excel indien PDF faalt
+                    # VANGNET 2: Backup locaties uit de Excel als de PDF ze niet kon vinden!
                     gevonden_locs = [loc for loc in LOCATIES_DB.keys() if loc in excel_text]
                     v_loc = gevonden_locs[0] if gevonden_locs else "Onbekend"
                     a_loc = gevonden_locs[-1] if len(gevonden_locs) > 1 else v_loc
@@ -161,7 +185,8 @@ def analyseer_bestanden(files, gekozen_project):
                     if t_nr in treinen: 
                         treinen[t_nr].update({"Gewicht (ton)": gewicht, "Type": type_rit})
                         if un_code: treinen[t_nr].update({"UN": un_code, "RID": "Ja"})
-                        if treinen[t_nr]["Vertrek"] == "Onbekend" and v_loc != "Onbekend":
+                        # Overschrijf 'Onbekend' met de Excel-locatie indien nodig
+                        if treinen[t_nr].get("Vertrek", "Onbekend") == "Onbekend" and v_loc != "Onbekend":
                             treinen[t_nr]["Vertrek"] = v_loc
                             treinen[t_nr]["Aankomst"] = a_loc
                     else: 
@@ -181,7 +206,6 @@ with st.sidebar:
         st.session_state.df_ritten = pd.DataFrame()
         st.session_state.messages = []
         st.rerun()
-    # --- NIEUW MENU ITEM TOEGEVOEGD ---
     keuze = st.radio("Menu:", ("🏠 Home (Dashboard)", "📄 Invoer Ritten", "🖨️ Rapportage", "💬 AI Assistent"))
 
 if keuze == "🏠 Home (Dashboard)":
@@ -287,7 +311,7 @@ elif keuze == "💬 AI Assistent":
             """
             
             try:
-                # Roep de Gemini AI aan
+                # Roep de stabiele Gemini-Pro AI aan
                 response = model.generate_content(systeem_prompt)
                 full_response = response.text
                 st.markdown(full_response)
