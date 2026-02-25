@@ -76,6 +76,15 @@ def genereer_word_rapport(df):
 
 def analyseer_bestanden(files, gekozen_project):
     treinen = {}
+    
+    # --- HET DEFINITIEVE VANGNET: Haal bekende treinen eerst uit de Excel bestandsnamen ---
+    bekende_treinen = set()
+    for file in files:
+        if file.name.lower().endswith(('.xlsx', '.xls')):
+            t_nr_match = re.search(r'(\d{5})', file.name)
+            if t_nr_match:
+                bekende_treinen.add(t_nr_match.group(1))
+
     for file in files:
         try:
             if file.name.lower().endswith('.pdf'):
@@ -85,11 +94,15 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    # --- DE DEFINITIEVE TREINNUMMER SCANNER ---
-                    # Dit zoekt uitsluitend naar 5 cijfers die direct gevolgd worden door een datum (bijv. 23/02)
-                    # Hierdoor pakt hij 65903 en 87902 perfect, en negeert hij jaartallen en dossiernummers.
-                    ruwe_nummers_met_spaties = re.findall(r'(?<!\d)([1-9](?:[\s]*\d){4})\s*(?=\d{2}/\d{2})', text)
-                    ruwe_nummers = [n.replace(' ', '').replace('\n', '') for n in ruwe_nummers_met_spaties]
+                    # --- DE FOOLPROOF EXTRACTIE ---
+                    clean_text = text.replace(' ', '').replace('\n', '')
+                    # Zoek 5 cijfers die direct voor een datum staan (bijv: 6590323/02/26)
+                    ruwe_nummers = re.findall(r'([1-9]\d{4})(?=\d{2}/\d{2}/\d{2,4})', clean_text)
+                    
+                    # Backup: forceer het zoeken naar de bekende Excel treinen
+                    for bt in bekende_treinen:
+                        if bt in clean_text and bt not in ruwe_nummers:
+                            ruwe_nummers.append(bt)
                     
                     un_codes = {'1202', '1863', '1965', '3257', '1203', '1170', '3082'}
                     nummers = list(set([n for n in ruwe_nummers if n not in un_codes]))
@@ -97,7 +110,6 @@ def analyseer_bestanden(files, gekozen_project):
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net)[^\d]*(\d+(?:[.,]\d+)?)', text, re.IGNORECASE)
                     afstand = float(km_match.group(1).replace(',', '.')) if km_match else 0.0
                     
-                    # --- DE DEFINITIEVE LOCATIE SCANNER ---
                     text_upper = text.upper()
                     route_match = re.search(r'([A-Z0-9.-]+)\s*->\s*([A-Z0-9.-]+)', text_upper)
                     
@@ -144,7 +156,6 @@ def analyseer_bestanden(files, gekozen_project):
                     gewicht = zuivere_data[zuivere_data < 4000].max().max()
                     gewicht = float(gewicht) if pd.notnull(gewicht) else 0.0
                     
-                    # Excel Logica: Bepaalt feilloos het type rit (beladen/ledig)
                     type_rit = "Ledige Rit" if t_nr.endswith('1') or t_nr.endswith('3') or gewicht < 450 else "Beladen Rit"
                     
                     if t_nr in treinen: 
