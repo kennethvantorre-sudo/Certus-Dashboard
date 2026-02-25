@@ -9,8 +9,16 @@ import base64
 import docx
 import folium
 from streamlit_folium import st_folium
+import google.generativeai as genai
+import json
 
 st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout="wide")
+
+# --- AI CONFIGURATIE ---
+API_KEY = "AIzaSyCiz1mWb378emBqRE3Tq3rLIIyFtm1fajI"
+genai.configure(api_key=API_KEY)
+# We gebruiken het snelle flash model, perfect voor text-extractie
+model = genai.GenerativeModel('gemini-1.5-flash') 
 
 # --- DATABASE LOCATIES ---
 LOCATIES_DB = {
@@ -74,71 +82,82 @@ def genereer_word_rapport(df):
     f.seek(0)
     return f
 
+def extract_pdf_with_ai(text):
+    """Stuurt de PDF tekst naar de Gemini AI en forceert een JSON output."""
+    prompt = f"""
+    Je bent een data-extractie assistent voor spoorwegoperaties. Je leest een ruwe Infrabel BNX PDF in.
+    Jouw taak is om de treinritten eruit te halen. Negeer dossiernummers en data. Zoek specifiek naar 5-cijferige treinnummers.
+    Haal de volgende datapunten eruit per trein:
+    1. treinnummer (string)
+    2. vertrek (string, afkorting of naam zoals GENT-ZEEH of GENT-ZEEHAVEN)
+    3. aankomst (string)
+    4. afstand_km (float, dit is de TreinKm of KmTrain)
+    5. is_rid (string: "Ja" als er 'RID: Oui / Ja' in de tekst staat, anders "Nee")
+    6. datum (string: formaat YYYY-MM-DD, zoek de datum van de rit)
+    
+    Geef je antwoord STRICT EN ALLEEN in dit JSON formaat terug, zonder markdown backticks, zonder extra tekst:
+    [
+        {{"treinnummer": "12345", "vertrek": "GENT-ZEEH", "aankomst": "VERB.GTS", "afstand_km": 14.5, "is_rid": "Ja", "datum": "2026-02-23"}}
+    ]
+    Als er meerdere treinen zijn, voeg ze toe aan de lijst.
+    
+    Tekst:
+    {text}
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        # Verwijder eventuele ongewenste markdown formatting die de AI soms toch toevoegt
+        raw_json = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(raw_json)
+        return data
+    except Exception as e:
+        st.error(f"AI Extractie fout: {e}")
+        return []
+
 def analyseer_bestanden(files, gekozen_project):
     treinen = {}
     
-    # --- HET DEFINITIEVE VANGNET: Haal bekende treinen eerst uit de Excel bestandsnamen ---
-    bekende_treinen = set()
     for file in files:
-        if file.name.lower().endswith(('.xlsx', '.xls')):
-            t_nr_match = re.search(r'(\d{5})', file.name)
-            if t_nr_match:
-                bekende_treinen.add(t_nr_match.group(1))
-
-    for file in files:
-        try:
-            if file.name.lower().endswith('.pdf'):
+        if file.name.lower().endswith('.pdf'):
+            try:
                 reader = PyPDF2.PdfReader(file)
                 text = "".join([page.extract_text() for page in reader.pages if page.extract_text()])
-                if "infrabel" in text.lower() or "certus" in text.lower() or "trein" in text.lower():
-                    datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
-                    datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
+                
+                # --- HIER DOET DE AI HET WERK ---
+                with st.spinner(f"🧠 AI leest {file.name}..."):
+                    ai_resultaten = extract_pdf_with_ai(text)
+                
+                for rit in ai_resultaten:
+                    t_nr = rit.get("treinnummer")
+                    if not t_nr: continue
                     
-                    # --- DE FOOLPROOF EXTRACTIE ---
-                    clean_text = text.replace(' ', '').replace('\n', '')
-                    # Zoek 5 cijfers die direct voor een datum staan (bijv: 6590323/02/26)
-                    ruwe_nummers = re.findall(r'([1-9]\d{4})(?=\d{2}/\d{2}/\d{2,4})', clean_text)
-                    
-                    # Backup: forceer het zoeken naar de bekende Excel treinen
-                    for bt in bekende_treinen:
-                        if bt in clean_text and bt not in ruwe_nummers:
-                            ruwe_nummers.append(bt)
-                    
-                    un_codes = {'1202', '1863', '1965', '3257', '1203', '1170', '3082'}
-                    nummers = list(set([n for n in ruwe_nummers if n not in un_codes]))
-                    
-                    km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net)[^\d]*(\d+(?:[.,]\d+)?)', text, re.IGNORECASE)
-                    afstand = float(km_match.group(1).replace(',', '.')) if km_match else 0.0
-                    
-                    text_upper = text.upper()
-                    route_match = re.search(r'([A-Z0-9.-]+)\s*->\s*([A-Z0-9.-]+)', text_upper)
-                    
-                    if route_match:
-                        vertrek_loc = route_match.group(1)
-                        aankomst_loc = route_match.group(2)
+                    if t_nr in treinen:
+                        treinen[t_nr].update({
+                            "Afstand (km)": float(rit.get("afstand_km", 0.0)),
+                            "Datum": rit.get("datum", datetime.today().strftime('%Y-%m-%d')),
+                            "Vertrek": rit.get("vertrek", "Onbekend"),
+                            "Aankomst": rit.get("aankomst", "Onbekend"),
+                            "RID": rit.get("is_rid", "Nee")
+                        })
                     else:
-                        vertrek_loc = "Onbekend"
-                        aankomst_loc = "Onbekend"
+                        treinen[t_nr] = {
+                            "Datum": rit.get("datum", datetime.today().strftime('%Y-%m-%d')), 
+                            "Project": gekozen_project, 
+                            "Trein": t_nr, 
+                            "Type": "Losse Rit", 
+                            "Afstand (km)": float(rit.get("afstand_km", 0.0)), 
+                            "Gewicht (ton)": 0.0, 
+                            "RID": rit.get("is_rid", "Nee"), 
+                            "UN": "",
+                            "Vertrek": rit.get("vertrek", "Onbekend"), 
+                            "Aankomst": rit.get("aankomst", "Onbekend")
+                        }
+            except Exception as e:
+                st.error(f"Fout bij uitlezen PDF {file.name}: {e}")
 
-                    for t_nr in nummers:
-                        is_rid = "Ja" if re.search(r'RID:\s*Oui\s*/\s*Ja', text, re.IGNORECASE) or any(code in text for code in un_codes) else "Nee"
-                        if t_nr in treinen:
-                            treinen[t_nr].update({
-                                "Afstand (km)": afstand, 
-                                "Datum": datum_str,
-                                "Vertrek": vertrek_loc,
-                                "Aankomst": aankomst_loc
-                            })
-                            if is_rid == "Ja": treinen[t_nr]["RID"] = "Ja"
-                        else:
-                            treinen[t_nr] = {
-                                "Datum": datum_str, "Project": gekozen_project, "Trein": t_nr, 
-                                "Type": "Losse Rit", "Afstand (km)": afstand, "Gewicht (ton)": 0.0, 
-                                "RID": is_rid, "UN": "",
-                                "Vertrek": vertrek_loc, "Aankomst": aankomst_loc
-                            }
-
-            elif file.name.lower().endswith(('.xlsx', '.xls')):
+        elif file.name.lower().endswith(('.xlsx', '.xls')):
+            try:
                 xl = pd.read_excel(file)
                 if 'Trein' in xl.columns and 'Project' in xl.columns:
                     st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, xl]).drop_duplicates(subset=['Trein'], keep='last')
@@ -168,8 +187,9 @@ def analyseer_bestanden(files, gekozen_project):
                             "RID": "Ja" if un_code else "Nee", "UN": un_code,
                             "Vertrek": "Onbekend", "Aankomst": "Onbekend"
                         }
-        except Exception as e: 
-            st.error(f"Fout bij {file.name}: {e}")
+            except Exception as e: 
+                st.error(f"Fout bij uitlezen Excel {file.name}: {e}")
+                
     return pd.DataFrame(list(treinen.values()))
 
 with st.sidebar:
@@ -196,8 +216,8 @@ if keuze == "🏠 Home (Dashboard)":
             
             if 'Vertrek' in df.columns and 'Aankomst' in df.columns:
                 for index, row in df.iterrows():
-                    vertrek_naam = row.get("Vertrek", "Onbekend")
-                    aankomst_naam = row.get("Aankomst", "Onbekend")
+                    vertrek_naam = str(row.get("Vertrek", "Onbekend"))
+                    aankomst_naam = str(row.get("Aankomst", "Onbekend"))
                     
                     if vertrek_naam in LOCATIES_DB:
                         v_coords = LOCATIES_DB[vertrek_naam]
