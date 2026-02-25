@@ -17,7 +17,6 @@ st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout=
 # --- AI CONFIGURATIE ---
 API_KEY = "AIzaSyCiz1mWb378emBqRE3Tq3rLIIyFtm1fajI"
 genai.configure(api_key=API_KEY)
-# We gebruiken het snelle flash model, perfect voor text-extractie
 model = genai.GenerativeModel('gemini-1.5-flash') 
 
 # --- DATABASE LOCATIES ---
@@ -30,7 +29,8 @@ LOCATIES_DB = {
     "ZEEBRUGGE": [51.328, 3.197],
     "KALLO": [51.254, 4.275],
     "BRUSSEL-ZUID": [50.836, 4.335],
-    "EVERGEM-BUNDEL ZANDEKEN": [51.121, 3.738]
+    "EVERGEM-BUNDEL ZANDEKEN": [51.121, 3.738],
+    "EVERGEM": [51.108, 3.708]
 }
 
 def speel_certus_animatie():
@@ -83,23 +83,24 @@ def genereer_word_rapport(df):
     return f
 
 def extract_pdf_with_ai(text):
-    """Stuurt de PDF tekst naar de Gemini AI en forceert een JSON output."""
+    """Stuurt de PDF tekst naar de Gemini AI met een slimmere prompt."""
     prompt = f"""
-    Je bent een data-extractie assistent voor spoorwegoperaties. Je leest een ruwe Infrabel BNX PDF in.
-    Jouw taak is om de treinritten eruit te halen. Negeer dossiernummers en data. Zoek specifiek naar 5-cijferige treinnummers.
-    Haal de volgende datapunten eruit per trein:
-    1. treinnummer (string)
-    2. vertrek (string, afkorting of naam zoals GENT-ZEEH of GENT-ZEEHAVEN)
+    Je bent een data-extractie assistent voor spoorwegoperaties van Infrabel.
+    Haal de ritgegevens uit de onderstaande ruwe PDF tekst.
+    Let op: Het treinnummer is meestal een 5-cijferig getal (zoals 65903 of 87902). Door PDF-leesfouten kan dit vastgeplakt zitten aan andere tekst (bijv. '00165903' of '6590323/02/26'). Haal hier logisch het 5-cijferige treinnummer uit.
+    
+    Haal per trein deze datapunten eruit:
+    1. treinnummer (string, 5 cijfers)
+    2. vertrek (string, afkorting of volledige locatienaam)
     3. aankomst (string)
     4. afstand_km (float, dit is de TreinKm of KmTrain)
-    5. is_rid (string: "Ja" als er 'RID: Oui / Ja' in de tekst staat, anders "Nee")
-    6. datum (string: formaat YYYY-MM-DD, zoek de datum van de rit)
+    5. is_rid (string: "Ja" als er 'RID: Oui / Ja' staat, anders "Nee")
+    6. datum (string: formaat YYYY-MM-DD)
     
-    Geef je antwoord STRICT EN ALLEEN in dit JSON formaat terug, zonder markdown backticks, zonder extra tekst:
+    Geef EXACT en ALLEEN dit JSON formaat terug, zonder markdown backticks:
     [
-        {{"treinnummer": "12345", "vertrek": "GENT-ZEEH", "aankomst": "VERB.GTS", "afstand_km": 14.5, "is_rid": "Ja", "datum": "2026-02-23"}}
+        {{"treinnummer": "65903", "vertrek": "GENT-ZEEH", "aankomst": "VERB.GTS", "afstand_km": 14.5, "is_rid": "Ja", "datum": "2026-02-23"}}
     ]
-    Als er meerdere treinen zijn, voeg ze toe aan de lijst.
     
     Tekst:
     {text}
@@ -107,24 +108,24 @@ def extract_pdf_with_ai(text):
     
     try:
         response = model.generate_content(prompt)
-        # Verwijder eventuele ongewenste markdown formatting die de AI soms toch toevoegt
         raw_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(raw_json)
         return data
     except Exception as e:
-        st.error(f"AI Extractie fout: {e}")
+        # Nu zien we het op het scherm als de AI in de war raakt
+        st.error(f"Fout bij AI JSON verwerking: {e}")
         return []
 
 def analyseer_bestanden(files, gekozen_project):
     treinen = {}
     
+    # EERST DE PDF'S (Via AI)
     for file in files:
         if file.name.lower().endswith('.pdf'):
             try:
                 reader = PyPDF2.PdfReader(file)
                 text = "".join([page.extract_text() for page in reader.pages if page.extract_text()])
                 
-                # --- HIER DOET DE AI HET WERK ---
                 with st.spinner(f"🧠 AI leest {file.name}..."):
                     ai_resultaten = extract_pdf_with_ai(text)
                 
@@ -156,18 +157,22 @@ def analyseer_bestanden(files, gekozen_project):
             except Exception as e:
                 st.error(f"Fout bij uitlezen PDF {file.name}: {e}")
 
-        elif file.name.lower().endswith(('.xlsx', '.xls')):
+    # DAARNA DE EXCEL (Tonnages & Locatie Back-up)
+    for file in files:
+        if file.name.lower().endswith(('.xlsx', '.xls')):
             try:
                 xl = pd.read_excel(file)
                 if 'Trein' in xl.columns and 'Project' in xl.columns:
                     st.session_state.df_ritten = pd.concat([st.session_state.df_ritten, xl]).drop_duplicates(subset=['Trein'], keep='last')
                     continue
+                
                 t_nr_match = re.search(r'(\d{5})', file.name)
                 if t_nr_match:
                     t_nr = t_nr_match.group(1)
-                    excel_text = xl.to_string(index=False)
+                    excel_text = xl.to_string(index=False).upper()
                     un_match = re.search(r'\b(1202|1863|1965|3257|1203|1170|3082)\b', excel_text)
                     un_code = un_match.group(1) if un_match else ""
+                    
                     for col in xl.columns:
                         xl[col] = pd.to_numeric(xl[col].astype(str).str.replace(',', '.'), errors='coerce')
                     num_data = xl.select_dtypes(include=['number'])
@@ -180,12 +185,24 @@ def analyseer_bestanden(files, gekozen_project):
                     if t_nr in treinen: 
                         treinen[t_nr].update({"Gewicht (ton)": gewicht, "Type": type_rit})
                         if un_code: treinen[t_nr].update({"UN": un_code, "RID": "Ja"})
+                        
+                        # BACKUP: Als de PDF faalde om locaties te vinden, trek ze uit de Excel!
+                        if treinen[t_nr]["Vertrek"] == "Onbekend":
+                            gevonden_locs = [loc for loc in LOCATIES_DB.keys() if loc in excel_text]
+                            if gevonden_locs:
+                                treinen[t_nr]["Vertrek"] = gevonden_locs[0]
+                                treinen[t_nr]["Aankomst"] = gevonden_locs[-1] if len(gevonden_locs) > 1 else gevonden_locs[0]
                     else: 
+                        # BACKUP LOCATIES VOOR EXCEL ZONDER PDF
+                        gevonden_locs = [loc for loc in LOCATIES_DB.keys() if loc in excel_text]
+                        v_loc = gevonden_locs[0] if gevonden_locs else "Onbekend"
+                        a_loc = gevonden_locs[-1] if len(gevonden_locs) > 1 else v_loc
+
                         treinen[t_nr] = {
                             "Datum": datetime.today().strftime('%Y-%m-%d'), "Project": gekozen_project, "Trein": t_nr, 
                             "Type": type_rit, "Afstand (km)": 0.0, "Gewicht (ton)": gewicht, 
                             "RID": "Ja" if un_code else "Nee", "UN": un_code,
-                            "Vertrek": "Onbekend", "Aankomst": "Onbekend"
+                            "Vertrek": v_loc, "Aankomst": a_loc
                         }
             except Exception as e: 
                 st.error(f"Fout bij uitlezen Excel {file.name}: {e}")
