@@ -3,20 +3,18 @@ import pandas as pd
 import PyPDF2
 import re
 from io import BytesIO
-import plotly.express as px
 from datetime import datetime
-import base64
-import docx
-import folium
-from streamlit_folium import st_folium
 import google.generativeai as genai
 
+# --- PAGINA CONFIG ---
 st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout="wide")
 
-# --- AI CONFIGURATIE ---
+# --- AI CONFIGURATIE (DE DEFINITIEVE FIX) ---
 API_KEY = "AIzaSyDGvPTbF1_s_PmUMqOhBr2BjVYVk6aS1Zg"
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash') 
+
+# We gebruiken de 'latest' versie om de v1beta fout te voorkomen
+model = genai.GenerativeModel('gemini-1.5-flash-latest') 
 
 # --- DATABASE LOCATIES ---
 LOCATIES_DB = {
@@ -25,12 +23,7 @@ LOCATIES_DB = {
     "FGZH": [51.134, 3.823],
     "VERB.GTS": [51.145, 3.815],
     "ANTWERPEN-NOORD": [51.275, 4.433],
-    "ROOSENDAAL": [51.540, 4.458],
-    "ZEEBRUGGE": [51.328, 3.197],
-    "KALLO": [51.254, 4.275],
-    "BRUSSEL-ZUID": [50.836, 4.335],
     "EVERGEM-BUNDEL ZANDEKEN": [51.121, 3.738],
-    "EVERGEM": [51.108, 3.708],
     "FZNKN": [51.121, 3.738]
 }
 
@@ -39,94 +32,88 @@ if 'df_ritten' not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-def analyseer_bestanden(files, gekozen_project):
+def analyseer_bestanden(files, proj):
     treinen = {}
     bekende_nrs = set()
 
-    # 1. EXCEL SCAN (Tonnages & Basis)
     for file in files:
         if file.name.lower().endswith(('.xlsx', '.xls')):
-            t_nr_match = re.search(r'(\d{5})', file.name)
-            if t_nr_match:
-                t_nr = t_nr_match.group(1)
+            t_nr_m = re.search(r'(\d{5})', file.name)
+            if t_nr_m:
+                t_nr = t_nr_m.group(1)
                 bekende_nrs.add(t_nr)
                 xl = pd.read_excel(file)
-                excel_text = xl.to_string(index=False).upper()
+                txt = xl.to_string().upper()
                 
-                for col in xl.columns: xl[col] = pd.to_numeric(xl[col].astype(str).str.replace(',', '.'), errors='coerce')
-                gewicht = xl.select_dtypes(include=['number']).max().max()
-                gewicht = float(gewicht) if pd.notnull(gewicht) and gewicht < 4000 else 0.0
+                # Gewicht & Locatie
+                for c in xl.columns: xl[c] = pd.to_numeric(xl[c].astype(str).str.replace(',', '.'), errors='coerce')
+                gew = xl.select_dtypes(include=['number']).max().max()
+                gew = float(gew) if pd.notnull(gew) and gew < 4000 else 0.0
                 
-                gevonden_locs = [loc for loc in LOCATIES_DB.keys() if loc in excel_text]
-                v_loc = gevonden_locs[0] if gevonden_locs else "Onbekend"
-                a_loc = gevonden_locs[-1] if len(gevonden_locs) > 1 else v_loc
+                locs = [l for l in LOCATIES_DB.keys() if l in txt]
+                v, a = (locs[0], locs[-1]) if locs else ("Onbekend", "Onbekend")
                 
                 treinen[t_nr] = {
-                    "Datum": datetime.today().strftime('%Y-%m-%d'),
-                    "Project": gekozen_project, "Trein": t_nr,
-                    "Type": "Ledige Rit" if gewicht < 450 else "Beladen Rit",
-                    "Afstand (km)": 0.0, "Gewicht (ton)": gewicht,
-                    "RID": "Ja" if "1863" in excel_text else "Nee",
-                    "Vertrek": v_loc, "Aankomst": a_loc
+                    "Datum": datetime.today().strftime('%Y-%m-%d'), "Project": proj, "Trein": t_nr,
+                    "Type": "Ledig" if gew < 450 else "Beladen", "Afstand (km)": 0.0, 
+                    "Gewicht (ton)": gew, "RID": "Ja" if "1863" in txt else "Nee", "Vertrek": v, "Aankomst": a
                 }
 
-    # 2. PDF SCAN (Kilometers koppelen)
     for file in files:
         if file.name.lower().endswith('.pdf'):
             reader = PyPDF2.PdfReader(file)
-            full_text = "".join([p.extract_text() for p in reader.pages])
-            clean_text = full_text.replace(' ', '').replace('\n', '')
+            full_txt = "".join([p.extract_text() for p in reader.pages])
+            clean_txt = full_txt.replace(' ', '').replace('\n', '')
             
-            km_m = re.search(r'(?:KmTrain|TreinKm|INFRABEL-net)[^\d]*(\d+(?:[.,]\d+)?)', full_text, re.IGNORECASE)
-            afstand = float(km_m.group(1).replace(',', '.')) if km_m else 0.0
+            km_m = re.search(r'(?:KmTrain|TreinKm|INFRABEL-net)[^\d]*(\d+(?:[.,]\d+)?)', full_txt, re.IGNORECASE)
+            km = float(km_m.group(1).replace(',', '.')) if km_m else 0.0
             
             for t_nr in bekende_nrs:
-                if t_nr in clean_text:
-                    if t_nr in treinen:
-                        treinen[t_nr]["Afstand (km)"] = afstand
-                        d_m = re.search(r'(\d{2})/(\d{2})/(\d{4})', full_text)
-                        if d_m: treinen[t_nr]["Datum"] = f"{d_m.group(3)}-{d_m.group(2)}-{d_m.group(1)}"
+                if t_nr in clean_txt and t_nr in treinen:
+                    treinen[t_nr]["Afstand (km)"] = km
 
     return pd.DataFrame(list(treinen.values()))
 
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("🚂 Certus Rail")
-    if st.button("🗑️ Reset Alles"):
+    if st.button("🗑️ Reset Systeem"):
         st.session_state.df_ritten = pd.DataFrame()
         st.session_state.messages = []
         st.rerun()
-    keuze = st.radio("Menu", ["🏠 Dashboard", "📄 Invoer", "💬 AI Assistent"])
+    menu = st.radio("Ga naar:", ["📊 Dashboard", "📄 Invoer", "💬 AI Assistent"])
 
-if keuze == "🏠 Dashboard":
-    st.title("📊 Dashboard")
-    df = st.session_state.df_ritten
-    if not df.empty:
-        st.metric("Totaal km", f"{df['Afstand (km)'].sum():,.1f}")
-        st.dataframe(df, use_container_width=True)
-    else: st.info("Geen data.")
+# --- DASHBOARD ---
+if menu == "📊 Dashboard":
+    st.title("📊 Actueel Overzicht")
+    if not st.session_state.df_ritten.empty:
+        st.dataframe(st.session_state.df_ritten, use_container_width=True)
+    else: st.info("Geen data beschikbaar.")
 
-elif keuze == "📄 Invoer":
-    st.title("📄 Invoer")
-    files = st.file_uploader("Upload bestanden", accept_multiple_files=True)
-    if files and st.button("🚀 Start Analyse"):
+# --- INVOER ---
+elif menu == "📄 Invoer":
+    st.title("📄 Data Invoer")
+    files = st.file_uploader("Upload wagonlijsten en BNX", accept_multiple_files=True)
+    if files and st.button("🚀 Start Verwerking"):
         st.session_state.df_ritten = analyseer_bestanden(files, "P420")
         st.rerun()
 
-elif keuze == "💬 AI Assistent":
+# --- AI CHAT ---
+elif menu == "💬 AI Assistent":
     st.title("🤖 Certus AI")
     for m in st.session_state.messages:
         with st.chat_message(m["role"]): st.markdown(m["content"])
     
-    if prompt := st.chat_input("Vraag iets..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"): st.markdown(prompt)
+    if p := st.chat_input("Vraag iets aan de AI..."):
+        st.session_state.messages.append({"role": "user", "content": p})
+        with st.chat_message("user"): st.markdown(p)
         
         with st.chat_message("assistant"):
             try:
-                ctx = st.session_state.df_ritten.to_csv(index=False) if not st.session_state.df_ritten.empty else "Geen ritten geladen."
-                response = model.generate_content(f"Context: {ctx}\n\nGebruiker zegt: {prompt}")
-                msg = response.text
-                st.markdown(msg)
-                st.session_state.messages.append({"role": "assistant", "content": msg})
+                data_ctx = st.session_state.df_ritten.to_csv(index=False) if not st.session_state.df_ritten.empty else "Geen data."
+                # Direct aanroepen zonder extra config om v1beta te omzeilen
+                res = model.generate_content(f"Data: {data_ctx}\n\nGebruiker: {p}")
+                st.markdown(res.text)
+                st.session_state.messages.append({"role": "assistant", "content": res.text})
             except Exception as e:
-                st.error(f"Fout: {str(e)}")
+                st.error(f"AI Connectie fout: {str(e)}")
