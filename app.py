@@ -84,8 +84,8 @@ def analyseer_bestanden(files, gekozen_project):
                     datum_match = re.search(r'(\d{2})/(\d{2})/(\d{4})', text)
                     datum_str = f"{datum_match.group(3)}-{datum_match.group(2)}-{datum_match.group(1)}" if datum_match else datetime.today().strftime('%Y-%m-%d')
                     
-                    ruwe_nummers_met_spaties = re.findall(r'(?<!\d)([1-9](?:[\s]*\d){4})(?!\d)', text)
-                    ruwe_nummers = [n.replace(' ', '').replace('\n', '') for n in ruwe_nummers_met_spaties]
+                    # --- TERUG NAAR JOUW SUCCESVOLLE V3.7 REGEX ---
+                    ruwe_nummers = re.findall(r'(?<!\d)([1-9]\d{4})(?!\d)', text) + re.findall(r'([1-9]\d{4})(?=\s*\d{2}/\d{2})', text)
                     
                     un_codes = {'1202', '1863', '1965', '3257', '1203', '1170', '3082'}
                     nummers = list(set([n for n in ruwe_nummers if n not in un_codes]))
@@ -93,7 +93,7 @@ def analyseer_bestanden(files, gekozen_project):
                     km_match = re.search(r'(?:TreinKm|KmTrain|INFRABEL-net)[^\d]*(\d+(?:[.,]\d+)?)', text, re.IGNORECASE)
                     afstand = float(km_match.group(1).replace(',', '.')) if km_match else 0.0
                     
-                    # --- NOG ROBUUSTERE REGEX VOOR LOCATIES ---
+                    # --- NIEUW: LOCATIE SCANNER (Van -> Naar) ---
                     text_upper = text.upper()
                     route_match = re.search(r'([A-Z0-9.-]+)\s*->\s*([A-Z0-9.-]+)', text_upper)
                     
@@ -156,6 +156,9 @@ def analyseer_bestanden(files, gekozen_project):
 
 with st.sidebar:
     st.write("🚂 **Certus Rail Solutions**")
+    if st.button("🗑️ Wis Data"):
+        st.session_state.df_ritten = pd.DataFrame()
+        st.rerun()
     keuze = st.radio("Menu:", ("🏠 Home (Dashboard)", "📄 Invoer Ritten", "🖨️ Rapportage"))
 
 if keuze == "🏠 Home (Dashboard)":
@@ -173,13 +176,11 @@ if keuze == "🏠 Home (Dashboard)":
         with col_kaart:
             m = folium.Map(location=[51.05, 3.71], zoom_start=8, tiles="CartoDB dark_matter")
             
-            # --- NIEUW: PLOT PINS EN TEKEN ROUTES ---
             if 'Vertrek' in df.columns and 'Aankomst' in df.columns:
                 for index, row in df.iterrows():
                     vertrek_naam = row.get("Vertrek", "Onbekend")
                     aankomst_naam = row.get("Aankomst", "Onbekend")
                     
-                    # Plot Vertrek (Groene pin)
                     if vertrek_naam in LOCATIES_DB:
                         v_coords = LOCATIES_DB[vertrek_naam]
                         folium.Marker(
@@ -188,7 +189,6 @@ if keuze == "🏠 Home (Dashboard)":
                             icon=folium.Icon(color='green', icon='play', prefix='fa')
                         ).add_to(m)
                     
-                    # Plot Aankomst (Rode pin)
                     if aankomst_naam in LOCATIES_DB:
                         a_coords = LOCATIES_DB[aankomst_naam]
                         folium.Marker(
@@ -197,7 +197,6 @@ if keuze == "🏠 Home (Dashboard)":
                             icon=folium.Icon(color='red', icon='stop', prefix='fa')
                         ).add_to(m)
 
-                    # Teken de route als beide locaties bekend zijn en ze niet hetzelfde zijn
                     if vertrek_naam in LOCATIES_DB and aankomst_naam in LOCATIES_DB and vertrek_naam != aankomst_naam:
                         lijn_kleur = 'orange' if row['Type'] == 'Beladen Rit' else 'lightblue'
                         folium.PolyLine(
