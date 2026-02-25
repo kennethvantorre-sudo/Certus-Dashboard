@@ -5,18 +5,15 @@ import re
 from io import BytesIO
 from datetime import datetime
 import google.generativeai as genai
-from google.generativeai.types import RequestOptions
 
 st.set_page_config(page_title="Certus Command Center", page_icon="🚂", layout="wide")
 
-# --- AI CONFIGURATIE (STRICTE VERSIE) ---
+# --- AI CONFIGURATIE ---
 API_KEY = "AIzaSyDGvPTbF1_s_PmUMqOhBr2BjVYVk6aS1Zg"
 genai.configure(api_key=API_KEY)
-
-# We gebruiken de stabiele 'gemini-1.5-flash' met een geforceerde stabiele API-versie
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- LOCATIES DATABASE (Nu met de codes uit jouw ritten) ---
+# --- DATABASE LOCATIES ---
 LOCATIES_DB = {
     "GENT-ZEEH": [51.134, 3.823],
     "GENT-ZEEHAVEN": [51.134, 3.823],
@@ -80,13 +77,10 @@ elif menu == "💬 AI Assistent":
         with st.chat_message("user"): st.markdown(p)
         with st.chat_message("assistant"):
             try:
-                ctx = st.session_state.df_ritten.to_csv(index=False)
-                # We forceren hier de v1 versie ipv v1beta
-                response = model.generate_content(
-                    f"Data: {ctx}\n\nVraag: {p}",
-                    request_options=RequestOptions(api_version='v1')
-                )
+                # Eenvoudige aanroep zonder complexe opties
+                ctx = st.session_state.df_ritten.to_csv(index=False) if not st.session_state.df_ritten.empty else "Geen data."
+                response = model.generate_content(f"Systeem: Je bent Certus AI. Data: {ctx}\n\nGebruiker: {p}")
                 st.markdown(response.text)
                 st.session_state.messages.append({"role": "assistant", "content": response.text})
             except Exception as e:
-                st.error(f"Connectie-check: {str(e)}")
+                st.error(f"Fout: {str(e)}")
